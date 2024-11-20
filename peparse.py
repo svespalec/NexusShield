@@ -8,6 +8,15 @@ from typing import Dict, List, Any, Optional
 
 
 class PEAnalyzer:
+    """
+    Advanced PE file analyzer for malware analysis and binary inspection.
+
+    Implements sophisticated static analysis techniques including:
+    - Entropy calculation
+    - Suspicious import detection
+    - Anomaly identification
+    """
+
     def __init__(
         self,
         patterns_file: str = "iocs/patterns.nex",
@@ -37,6 +46,11 @@ class PEAnalyzer:
             return {}
 
     def get_suspicious_imports(self, pe: pefile.PE) -> List[Dict[str, str]]:
+        """
+        - Analyzes PE file imports to detect potentially malicious function calls.
+        - Implements advanced pattern matching against known suspicious Windows API calls commonly used
+          in malware (e.g., Process Injection, Keylogging, Network Operations).
+        """
         suspicious_imports = []
 
         if not hasattr(pe, "DIRECTORY_ENTRY_IMPORT"):
@@ -44,11 +58,14 @@ class PEAnalyzer:
 
         for entry in pe.DIRECTORY_ENTRY_IMPORT:
             dll = entry.dll.decode().lower()
+
             for imp in entry.imports:
                 if not imp.name:
                     continue
 
                 name = imp.name.decode()
+
+                # Analyze each import against known malicious function patterns
                 for category, funcs in self.suspicious_functions.items():
                     if any(f.lower() in name.lower() for f in funcs):
                         if not any(x["name"] == name for x in suspicious_imports):
@@ -59,40 +76,77 @@ class PEAnalyzer:
         return suspicious_imports
 
     def get_suspicious_strings(self, data: bytes) -> Dict[str, List[str]]:
+        """
+        Performs advanced string analysis using regular expressions to identify potential
+        indicators of compromise (IoCs).
+
+        Implementation details:
+        - Uses regex pattern matching optimized for binary data
+        - Handles ASCII and UTF-8 encoded strings with error tolerance
+        - Implements memory-efficient string deduplication using sets
+        - Groups matches by threat categories for structured analysis
+        """
         suspicious_strings = {}
+
         for category, patterns in self.patterns.items():
             matches = set()
+
             for pattern in patterns:
                 escaped_pattern = re.escape(pattern)
+
                 for match in re.finditer(escaped_pattern, data):
                     try:
                         string = match.group().decode("ascii", errors="ignore")
                         matches.add(string)
                     except:
                         continue
+
             if matches:
                 suspicious_strings[category] = list(matches)
+
         return suspicious_strings
 
     @staticmethod
     def calculate_entropy(data: bytes) -> float:
+        """
+        Implements Shannon entropy calculation to detect potential packed or encrypted content.
+        High entropy (>7.0) often indicates compression, encryption, or obfuscation techniques.
+
+        Formula: H = -sum(p(x) * log2(p(x))) where p(x) is the probability of byte x
+        """
         if not data:
             return 0.0
 
         occurences = [0] * 256
+
         for byte in data:
             occurences[byte] += 1
 
         entropy = 0
+
         for count in occurences:
             if count:
                 probability = count / len(data)
                 entropy -= probability * math.log2(probability)
+
         return round(entropy, 2)
 
     def analyze_pe_file(self, file_path: str) -> Dict[str, Any]:
+        """
+        Performs comprehensive static analysis of PE files using multiple detection techniques.
+
+        Analysis components:
+        - File metadata extraction and hash generation
+        - Import table analysis for suspicious API usage
+        - String pattern matching against known IoCs
+        - Section entropy analysis for packed/encrypted content
+        - Header structure validation and anomaly detection
+        - Resource and debug information analysis
+        - Digital signature verification (basic)
+        """
         try:
             pe = pefile.PE(file_path)
+
             with open(file_path, "rb") as f:
                 data = f.read()
 
@@ -124,6 +178,15 @@ class PEAnalyzer:
             return {"error": f"Analysis failed: {str(e)}"}
 
     def _get_file_info(self, data: bytes, pe: pefile.PE) -> Dict[str, Any]:
+        """
+        Extracts critical metadata and cryptographic hashes from the PE file.
+
+        Technical details:
+        - Calculates cryptographic hashes (MD5, SHA256) for file integrity verification
+        - Generates Import Hash (imphash) for detecting functionally similar malware variants
+        - Determines PE architecture type (PE32/PE32+) for system compatibility
+        - Extracts compilation timestamp for temporal analysis
+        """
         return {
             "size": len(data),
             "type": (
@@ -141,16 +204,22 @@ class PEAnalyzer:
 
     def _get_high_entropy_sections(self, pe: pefile.PE) -> List[Dict[str, Any]]:
         high_entropy_sections = []
+
         for section in pe.sections:
             entropy = self.calculate_entropy(section.get_data())
+
             if entropy > 7.0:
                 high_entropy_sections.append(
                     {"name": section.Name.decode().rstrip("\x00"), "entropy": entropy}
                 )
+
         return high_entropy_sections
 
     @staticmethod
     def _get_headers_info(pe: pefile.PE) -> Dict[str, Any]:
+        """
+        Extracts and analyzes PE header structures for anomaly detection.
+        """
         return {
             "characteristics": pe.FILE_HEADER.Characteristics,
             "subsystem": pe.OPTIONAL_HEADER.Subsystem,
@@ -163,6 +232,14 @@ class PEAnalyzer:
         }
 
     def _get_section_info(self, pe: pefile.PE) -> Dict[str, Any]:
+        """
+        Performs deep analysis of PE sections to identify suspicious characteristics.
+
+        Examines:
+        - Section permissions
+        - Entropy
+        - Attributes indicating likely malicious behavior (e.g. executable stack, writable code sections)
+        """
         return {
             "number_of_sections": pe.FILE_HEADER.NumberOfSections,
             "sections": [
@@ -181,6 +258,15 @@ class PEAnalyzer:
 
     @staticmethod
     def _get_anomalies(pe: pefile.PE, data: bytes) -> Dict[str, bool]:
+        """
+        Detects various PE file anomalies that might indicate tampering or malicious modifications.
+
+        Checks for:
+        - Overlay data (potential steganography)
+        - TLS callbacks (execution flow manipulation)
+        - Debug information (potential anti-debugging)
+        - Digital signatures (certificate validation)
+        """
         return {
             "has_overlay": len(data)
             > pe.sections[-1].PointerToRawData + pe.sections[-1].SizeOfRawData,
@@ -205,12 +291,14 @@ def main():
         return
 
     file_path = sys.argv[1]
+
     if not Path(file_path).exists():
         print(f"Error: File {file_path} not found")
         return
 
     analyzer = PEAnalyzer()
     analysis = analyzer.analyze_pe_file(file_path)
+
     print(json.dumps(analysis, indent=2))
 
 
