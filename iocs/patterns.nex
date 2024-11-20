@@ -1,0 +1,61 @@
+{
+    "network": [
+        "http://",
+        "https://",
+        "ftp://",
+        "ws://",
+        "wss://",
+        ".com",
+        ".net",
+        ".org",
+        "socket",
+        "connect",
+        "pastebin"
+    ],
+    "system_commands": [
+        "cmd.exe",
+        "powershell",
+        "rundll32",
+        "regsvr32",
+        "mshta",
+        "wscript",
+        "cscript",
+        "bitsadmin",
+        "certutil",
+        "schtasks"
+    ],
+    "system_paths": [
+        "\\windows\\",
+        "\\system32\\",
+        "\\syswow64\\",
+        "\\temp\\",
+        "\\appdata\\",
+        "\\programdata\\",
+        "\\users\\",
+        "\\startup\\"
+    ],
+    "registry": [
+        "HKEY_LOCAL_MACHINE",
+        "HKEY_CURRENT_USER",
+        "HKEY_CLASSES_ROOT",
+        "CurrentVersion\\Run",
+        "\\Software\\Microsoft\\",
+        "RunOnce"
+    ],
+    "suspicious_apis": [
+        "VirtualAlloc",
+        "VirtualProtect",
+        "WriteProcessMemory",
+        "CreateRemoteThread",
+        "LoadLibrary",
+        "GetProcAddress",
+        "CheckRemoteDebugger",
+        "Sleep",
+        "InternetOpen",
+        "WSAStartup",
+        "connect",
+        "CreateThread",
+        "SetWindowsHook",
+        "EnumProcess"
+    ]
+}
