@@ -61,10 +61,13 @@ def analyze_with_gemini(indicators):
 Based on these indicators, analyze if this is likely malware. Return your analysis in this exact JSON format:
 {{
     "malware_probability": <number between 0-100>,
-    "iocs": [<list of identified IOCs>],
-    "suspicious_behaviors": [<list of suspicious behaviors found>],
-    "explanation": "<detailed explanation of the analysis>"
-}}"""
+    "iocs": [<list of network IOCs, C2 servers, registry keys, file paths, or other malicious artifacts found - DO NOT include file hashes>],
+    "suspicious_behaviors": [<list of specific suspicious behaviors, each as a concise point>],
+    "analysis_points": [<list of specific reasons why this file is suspicious, one detailed point per array element>],
+    "explanation": "<brief overall conclusion about the file's maliciousness>"
+}}
+
+Note: For the analysis_points, break down each suspicious characteristic into a separate, detailed explanation."""
 
     try:
         response = model.generate_content(prompt)
@@ -88,6 +91,7 @@ Based on these indicators, analyze if this is likely malware. Return your analys
                 "malware_probability": 0,
                 "iocs": [],
                 "suspicious_behaviors": [],
+                "analysis_points": [],
                 "explanation": f"Error parsing Gemini response: {text}"
             }
     except Exception as e:
@@ -96,6 +100,7 @@ Based on these indicators, analyze if this is likely malware. Return your analys
             "malware_probability": 0,
             "iocs": [],
             "suspicious_behaviors": [],
+            "analysis_points": [],
             "explanation": "Failed to analyze with Gemini API"
         }
 
