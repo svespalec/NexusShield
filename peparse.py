@@ -134,21 +134,12 @@ class PEAnalyzer:
     def analyze_pe_file(self, file_path: str) -> Dict[str, Any]:
         """
         Performs comprehensive static analysis of PE files using multiple detection techniques.
-
-        Analysis components:
-        - File metadata extraction and hash generation
-        - Import table analysis for suspicious API usage
-        - String pattern matching against known IoCs
-        - Section entropy analysis for packed/encrypted content
-        - Header structure validation and anomaly detection
-        - Resource and debug information analysis
-        - Digital signature verification (basic)
         """
         try:
-            pe = pefile.PE(file_path)
-
             with open(file_path, "rb") as f:
                 data = f.read()
+            
+            pe = pefile.PE(data=data)
 
             analysis = {
                 "file_info": self._get_file_info(data, pe),
@@ -158,7 +149,6 @@ class PEAnalyzer:
                 "headers": self._get_headers_info(pe),
                 "section_info": self._get_section_info(pe),
                 "anomalies": self._get_anomalies(pe, data),
-                # Additional analysis
                 "imports_count": (
                     len(pe.DIRECTORY_ENTRY_IMPORT)
                     if hasattr(pe, "DIRECTORY_ENTRY_IMPORT")
@@ -173,6 +163,7 @@ class PEAnalyzer:
                 "is_system": pe.FILE_HEADER.Characteristics & 0x1000,
             }
 
+            pe.close()
             return analysis
         except Exception as e:
             return {"error": f"Analysis failed: {str(e)}"}

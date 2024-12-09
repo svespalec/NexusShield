@@ -1,0 +1,4 @@
+flask==3.1.0
+pefile==2024.8.26
+google-generativeai==0.8.3
+python-dotenv==1.0.0
