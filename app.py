@@ -1,10 +1,13 @@
 import os
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response, stream_with_context
 from werkzeug.utils import secure_filename
 import google.generativeai as genai
 from dotenv import load_dotenv
 from peparse import PEAnalyzer
 import json
+import time
+import uuid
+from threading import Lock
 
 # Load environment variables
 load_dotenv()
@@ -19,6 +22,10 @@ app.config['UPLOAD_FOLDER'] = 'temp_uploads'
 
 # Ensure upload directory exists
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+# Store analysis status
+analysis_status = {}
+status_lock = Lock()
 
 def extract_key_indicators(analysis):
     """Extract the most important indicators for malware detection."""
@@ -40,8 +47,14 @@ def extract_key_indicators(analysis):
         }
     }
 
-def analyze_with_gemini(indicators):
-    """Send the indicators to Gemini for analysis."""
+def count_tokens_gemini(text):
+    """Calculate token count for Gemini 1.5 Pro based on an approximation."""
+    # Assuming 1 token = 4 characters on average
+    return len(text) // 4
+
+def analyze_with_gemini(indicators, analysis_id):
+    print("indicators sending: ", indicators)
+    """Send the indicators to Gemini for analysis with streaming support."""
     prompt = f"""Analyze this PE file for potential malware characteristics. Here are the key indicators:
 
 1. File Information:
@@ -69,10 +82,25 @@ Based on these indicators, analyze if this is likely malware. Return your analys
 
 Note: For the analysis_points, break down each suspicious characteristic into a separate, detailed explanation."""
 
+    # Update token count
+    token_count = count_tokens_gemini(prompt)
+    with status_lock:
+        analysis_status[analysis_id]["token_count"] = token_count
+        analysis_status[analysis_id]["status"] = "analyzing"
+
     try:
-        response = model.generate_content(prompt)
+        response = model.generate_content(prompt, stream=True)
+        accumulated_response = ""
+        
+        for chunk in response:
+            if chunk.text:
+                accumulated_response += chunk.text
+                with status_lock:
+                    analysis_status[analysis_id]["partial_response"] = accumulated_response
+                    analysis_status[analysis_id]["progress"] += 1
+
         # Clean up the response text
-        text = response.text
+        text = accumulated_response
         
         # Remove markdown code block if present
         if "```json" in text:
@@ -85,17 +113,25 @@ Note: For the analysis_points, break down each suspicious characteristic into a 
         
         # Parse the JSON
         try:
-            return json.loads(text)
+            result = json.loads(text)
+            with status_lock:
+                analysis_status[analysis_id]["status"] = "completed"
+                analysis_status[analysis_id]["result"] = result
+            return result
         except json.JSONDecodeError:
-            return {
+            error_result = {
                 "malware_probability": 0,
                 "iocs": [],
                 "suspicious_behaviors": [],
                 "analysis_points": [],
                 "explanation": f"Error parsing Gemini response: {text}"
             }
+            with status_lock:
+                analysis_status[analysis_id]["status"] = "error"
+                analysis_status[analysis_id]["result"] = error_result
+            return error_result
     except Exception as e:
-        return {
+        error_result = {
             "error": f"Gemini API error: {str(e)}",
             "malware_probability": 0,
             "iocs": [],
@@ -103,6 +139,10 @@ Note: For the analysis_points, break down each suspicious characteristic into a 
             "analysis_points": [],
             "explanation": "Failed to analyze with Gemini API"
         }
+        with status_lock:
+            analysis_status[analysis_id]["status"] = "error"
+            analysis_status[analysis_id]["result"] = error_result
+        return error_result
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
@@ -116,6 +156,19 @@ def analyze():
     filename = secure_filename(file.filename)
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     
+    # Generate unique analysis ID
+    analysis_id = str(uuid.uuid4())
+    
+    # Initialize analysis status
+    with status_lock:
+        analysis_status[analysis_id] = {
+            "status": "starting",
+            "progress": 0,
+            "token_count": 0,
+            "partial_response": "",
+            "result": None
+        }
+    
     try:
         # Save the uploaded file
         file.save(filepath)
@@ -125,16 +178,17 @@ def analyze():
         pe_analysis = analyzer.analyze_pe_file(filepath)
         
         if 'error' in pe_analysis:
-            return jsonify({'error': pe_analysis['error']}), 400
+            return jsonify({'error': pe_analysis['error'], 'analysis_id': analysis_id}), 400
         
         # Extract key indicators
         key_indicators = extract_key_indicators(pe_analysis)
         
-        # Get Gemini analysis
-        gemini_analysis = analyze_with_gemini(key_indicators)
+        # Start Gemini analysis in a way that allows streaming
+        gemini_analysis = analyze_with_gemini(key_indicators, analysis_id)
         
         # Combine manual and Gemini analysis
         result = {
+            'analysis_id': analysis_id,
             'manual_analysis': key_indicators,
             'gemini_analysis': gemini_analysis
         }
@@ -142,19 +196,57 @@ def analyze():
         return jsonify(result)
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        with status_lock:
+            analysis_status[analysis_id]["status"] = "error"
+            analysis_status[analysis_id]["result"] = {"error": str(e)}
+        return jsonify({'error': str(e), 'analysis_id': analysis_id}), 500
         
     finally:
         # Clean up temporary file with retry mechanism
-        for _ in range(3):  # Try up to 3 times
+        for _ in range(3):
             try:
                 if os.path.exists(filepath):
-                    os.close(os.open(filepath, os.O_RDONLY))  # Force close any open handles
+                    os.close(os.open(filepath, os.O_RDONLY))
                     os.remove(filepath)
                 break
             except Exception:
-                import time
-                time.sleep(0.1)  # Wait a bit before retrying
+                time.sleep(0.1)
+
+@app.route('/status/<analysis_id>', methods=['GET'])
+def get_status(analysis_id):
+    """Get the current status of an analysis."""
+    with status_lock:
+        if analysis_id not in analysis_status:
+            return jsonify({"error": "Analysis ID not found"}), 404
+        
+        status_data = analysis_status[analysis_id].copy()
+        
+        # Clean up completed analyses after a while
+        if status_data["status"] in ["completed", "error"]:
+            if time.time() - status_data.get("completion_time", 0) > 3600:  # Clean up after 1 hour
+                del analysis_status[analysis_id]
+        
+        return jsonify(status_data)
+
+@app.route('/stream/<analysis_id>')
+def stream_analysis(analysis_id):
+    """Stream the analysis results as they come in."""
+    def generate():
+        while True:
+            with status_lock:
+                if analysis_id not in analysis_status:
+                    yield f"data: {json.dumps({'error': 'Analysis not found'})}\n\n"
+                    break
+                
+                status = analysis_status[analysis_id]
+                yield f"data: {json.dumps(status)}\n\n"
+                
+                if status['status'] in ['completed', 'error']:
+                    break
+            
+            time.sleep(0.5)  # Check every 500ms
+    
+    return Response(stream_with_context(generate()), mimetype='text/event-stream')
 
 if __name__ == '__main__':
     app.run(debug=True)
